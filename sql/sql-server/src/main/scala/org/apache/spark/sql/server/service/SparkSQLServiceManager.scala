@@ -36,7 +36,7 @@ import org.apache.spark.sql.server.service.livy.{LivyProxyContext, LivyProxyExec
 import org.apache.spark.sql.server.service.postgresql.{PgCatalogInitializer, PgCatalogUpdater, PgProtocolService, PgSessionInitializer}
 import org.apache.spark.sql.server.ui.SQLServerTab
 import org.apache.spark.sql.server.util.RecurringTimer
-import org.apache.spark.util.SystemClock
+import org.apache.spark.util.{SystemClock, Utils}
 
 
 // Base trait for `SQLContext` and `LivyProxyContext`
@@ -75,6 +75,16 @@ trait SessionService {
   def executeStatement(sessionId: Int, plan: (String, LogicalPlan)): Operation
 }
 
+trait MultiSessionFactory {
+  def getSqlContext(dbName: String): SQLContext
+}
+
+private[service] class DefaultMultiSessionFactory extends MultiSessionFactory {
+  override def getSqlContext(dbName: String): SQLContext = {
+    SQLServerEnv.newSQLContext()
+  }
+}
+
 private[service] case class TimeStampedValue[V](value: V, timestamp: Long)
 
 private[service] class SessionManager(initSession: (String, SQLContext) => Unit)
@@ -90,8 +100,11 @@ private[service] class SessionManager(initSession: (String, SQLContext) => Unit)
 
   private var idleSessionCleanupDelay: Long = _
   private var idleSessionCleaner: RecurringTimer = _
+  private var multiSessionFactory: MultiSessionFactory = _
 
   override def doInit(conf: SQLConf): Unit = {
+    multiSessionFactory = Utils.classForName(conf.sqlServerMultiSessionFactoryClass)
+      .newInstance().asInstanceOf[MultiSessionFactory]
     idleSessionCleanupDelay = conf.sqlServerIdleSessionCleanupDelay
     if (idleSessionCleanupDelay > 0) {
       // For testing
@@ -108,7 +121,7 @@ private[service] class SessionManager(initSession: (String, SQLContext) => Unit)
         }
       case "multi-session" =>
         (_: Int, dbName: String) => {
-          val sqlContext = SQLServerEnv.sqlContext.newSession()
+          val sqlContext = multiSessionFactory.getSqlContext(dbName)
           initSession(dbName, sqlContext)
           SQLContextHolder(sqlContext)
         }

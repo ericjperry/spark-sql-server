@@ -170,6 +170,13 @@ object SQLServerConf {
       .internal()
       .intConf
       .createWithDefault(3 * 1024 * 1024)
+
+  val SQLSERVER_MULTI_SESSION_FACTORY =
+    buildStaticConf("spark.sql.server.multiSessionFactory")
+      .doc("The full class name of the factory that will be used to create SQLContext objects " +
+        "when the server is configured for a multi-session deployment.")
+      .stringConf
+      .createWithDefault("org.apache.spark.sql.server.service.DefaultMultiSessionFactory")
 }
 
 class SQLServerConf(conf: SQLConf) {
@@ -216,6 +223,8 @@ class SQLServerConf(conf: SQLConf) {
   def sqlServerIdleOperationTimeout: Long = getStaticConf(SQLSERVER_IDLE_OPERATION_TIMEOUT)
 
   def sqlServerMessageBufferSizeInBytes: Int = getStaticConf(SQLSERVER_MESSAGE_BUFFER_SIZE_IN_BYTES)
+
+  def sqlServerMultiSessionFactoryClass: String = getConf(SQLSERVER_MULTI_SESSION_FACTORY)
 
   /** ********************** SQLConf functionality methods ************ */
 

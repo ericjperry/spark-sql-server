@@ -41,13 +41,14 @@ import org.apache.hadoop.security.UserGroupInformation
 import org.ietf.jgss.{GSSContext, GSSCredential, GSSException, GSSManager, Oid}
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.SQLContext
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.command.SetCommand
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.server.{SQLServerConf, SQLServerEnv}
 import org.apache.spark.sql.server.SQLServerConf._
-import org.apache.spark.sql.server.service.{Operation, SessionService, SessionState}
+import org.apache.spark.sql.server.service.{Operation, SessionService, SessionState, SQLContextHolder}
 import org.apache.spark.sql.server.service.postgresql.PgMetadata._
 import org.apache.spark.sql.server.service.postgresql.PgUtils
 import org.apache.spark.sql.server.service.postgresql.execution.command.BeginCommand
@@ -298,6 +299,13 @@ object PgWireProtocol extends Logging {
     }
   }
 
+  private def getSqlContextForParsing(sessionState: V3SessionState): SQLContext = {
+    sessionState._context match {
+      case SQLContextHolder(sqlContext) => sqlContext
+      case _ => SQLServerEnv.sqlContext
+    }
+  }
+
   // TODO: Needs to change `Any` into `Unit`
   private type MessageProcessorType = (V3SessionState) => Any
 
@@ -541,12 +549,11 @@ object PgWireProtocol extends Logging {
       logInfo(s"Parse: queryName='$queryName' query='$query' objIds=$params")
 
       ("Parse", (sessionState: V3SessionState) => {
-        import sessionState._
 
-        val parsed = PgUtils.parse(query)
+        val parsed = PgUtils.parse(query, getSqlContextForParsing(sessionState))
         val schema = {
           import org.apache.spark.sql.server.service.SQLContextHolder
-          _context match {
+          sessionState._context match {
             case SQLContextHolder(ctx) =>
               val sesseionSpecificAnalyzer = ctx.sessionState.analyzer
               sesseionSpecificAnalyzer.execute(parsed).schema
@@ -555,8 +562,8 @@ object PgWireProtocol extends Logging {
           }
         }
         sessionState.queries(queryName) = QueryState(query, parsed, params, schema)
-        ctx.write(ParseComplete)
-        ctx.flush()
+        sessionState.ctx.write(ParseComplete)
+        sessionState.ctx.flush()
       })
     },
 
@@ -589,7 +596,7 @@ object PgWireProtocol extends Logging {
 
             // Checks if `PostgreSqlParser` can parse the input query and executes the query
             // in `PostgreSQLExecutor`.
-            val plan = (query, PgUtils.parse(query))
+            val plan = (query, PgUtils.parse(query, getSqlContextForParsing(sessionState)))
             val execState = cli.executeStatement(sessionState._sessionId, plan)
             val resultRowIter = execState.run()
 

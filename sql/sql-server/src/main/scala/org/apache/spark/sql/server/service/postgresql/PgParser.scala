@@ -22,11 +22,11 @@ import java.util.Locale
 import scala.collection.JavaConverters._
 import scala.collection.mutable.Buffer
 
-import org.apache.spark.sql.catalyst.FunctionIdentifier
+import org.apache.spark.sql.catalyst.{FunctionIdentifier, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis._
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateFunction, First}
-import org.apache.spark.sql.catalyst.parser.ParseException
+import org.apache.spark.sql.catalyst.parser.{ParseException, ParserInterface}
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.server.SQLServerConf._
@@ -43,8 +43,24 @@ import org.apache.spark.sql.types._
  * TODO: We just copy Spark parser files into `org.apache.spark.sql.server.parser.*` and build
  * a new parser for PostgreSQL. So, we should fix this in a pluggable way.
  */
-private[postgresql] class PgParser(conf: SQLConf) extends SparkSqlParser(conf) {
+private[postgresql] class PgParser(conf: SQLConf, parentParser: ParserInterface)
+  extends SparkSqlParser(conf) {
   override val astBuilder = new PgAstBuilder(conf)
+
+  override def parsePlan(sqlText: String): LogicalPlan = parentParser.parsePlan(sqlText)
+
+  override def parseExpression(sqlText: String): Expression = parentParser.parseExpression(sqlText)
+
+  override def parseTableIdentifier(sqlText: String): TableIdentifier =
+    parentParser.parseTableIdentifier(sqlText)
+
+  override def parseFunctionIdentifier(sqlText: String): FunctionIdentifier =
+    parentParser.parseFunctionIdentifier(sqlText)
+
+  override def parseTableSchema(sqlText: String): StructType =
+    parentParser.parseTableSchema(sqlText)
+
+  override def parseDataType(sqlText: String): DataType = parentParser.parseDataType(sqlText)
 }
 
 /**

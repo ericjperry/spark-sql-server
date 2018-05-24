@@ -19,6 +19,7 @@ package org.apache.spark.sql.server.service.postgresql
 
 import java.sql.SQLException
 
+import org.apache.spark.sql.SQLContext
 import org.apache.spark.sql.catalyst.parser.ParseException
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.server.SQLServerEnv
@@ -26,10 +27,8 @@ import org.apache.spark.sql.server.SQLServerEnv
 
 private[service] object PgUtils {
 
-  private val parser = new PgParser(SQLServerEnv.sqlConf)
-
-  def parse(query: String): LogicalPlan = try {
-    parser.parsePlan(query)
+  def parse(query: String, sqlContext: SQLContext): LogicalPlan = try {
+    new PgParser(SQLServerEnv.sqlConf, sqlContext.sessionState.sqlParser).parsePlan(query)
   } catch {
     case e: ParseException => throw new SQLException(e.getMessage)
   }
