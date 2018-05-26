@@ -75,7 +75,7 @@ private class ExecutorEndpoint(override val rpcEnv: RpcEnv, sessionState: LivySe
 
   private def analyzePlan(query: String): LogicalPlan = {
     val sesseionSpecificAnalyzer = sqlContext.sessionState.analyzer
-    sesseionSpecificAnalyzer.execute(PgUtils.parse(query))
+    sesseionSpecificAnalyzer.execute(PgUtils.parse(query, sqlContext))
   }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = synchronized {
@@ -86,7 +86,7 @@ private class ExecutorEndpoint(override val rpcEnv: RpcEnv, sessionState: LivySe
 
     case ExecuteQuery(statementId, sql) =>
       try {
-        val logicalPlan = PgUtils.parse(sql)
+        val logicalPlan = PgUtils.parse(sql, sqlContext)
         activeOperation = executorImpl.newOperation(sessionState, statementId, (sql, logicalPlan))
         // TODO: Needs to support incremental collects
         val rowIter = activeOperation.run()
