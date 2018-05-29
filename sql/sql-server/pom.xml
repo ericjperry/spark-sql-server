@@ -22,12 +22,13 @@
   <parent>
     <groupId>org.apache.spark</groupId>
     <artifactId>spark-sql-server_2.11</artifactId>
-    <version>0.1.2-spark2.3-SNAPSHOT</version>
+    <version>0.1.2-SNAPSHOT</version>
     <relativePath>../../pom.xml</relativePath>
   </parent>
 
   <groupId>org.apache.spark</groupId>
   <artifactId>sql-server_2.11</artifactId>
+  <version>0.1.2-spark-${spark.version}-SNAPSHOT</version>
   <packaging>jar</packaging>
   <name>SQL server based on the PostgreSQL protocol</name>
 

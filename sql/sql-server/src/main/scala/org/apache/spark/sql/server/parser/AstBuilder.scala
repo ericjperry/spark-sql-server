@@ -38,7 +38,6 @@ import org.apache.spark.sql.catalyst.parser.ParserUtils
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.server.parser._
 import org.apache.spark.sql.server.parser.SqlBaseParser._
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.CalendarInterval
@@ -196,8 +195,6 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
    * {{{
    *   INSERT OVERWRITE TABLE tableIdentifier [partitionSpec [IF NOT EXISTS]]?
    *   INSERT INTO [TABLE] tableIdentifier [partitionSpec]
-   *   INSERT OVERWRITE [LOCAL] DIRECTORY STRING [rowFormat] [createFileFormat]
-   *   INSERT OVERWRITE [LOCAL] DIRECTORY [STRING] tableProvider [OPTIONS tablePropertyList]
    * }}}
    * operation to logical plan
    */
@@ -211,12 +208,6 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
       case table: InsertOverwriteTableContext =>
         val (tableIdent, partitionKeys, exists) = visitInsertOverwriteTable(table)
         InsertIntoTable(UnresolvedRelation(tableIdent), partitionKeys, query, true, exists)
-      case dir: InsertOverwriteDirContext =>
-        val (isLocal, storage, provider) = visitInsertOverwriteDir(dir)
-        InsertIntoDir(isLocal, storage, provider, query, overwrite = true)
-      case hiveDir: InsertOverwriteHiveDirContext =>
-        val (isLocal, storage, provider) = visitInsertOverwriteHiveDir(hiveDir)
-        InsertIntoDir(isLocal, storage, provider, query, overwrite = true)
       case _ =>
         throw new ParseException("Invalid InsertIntoContext", ctx)
     }
@@ -252,7 +243,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
   }
 
   /**
-   * Write to a directory, returning a [[InsertIntoDir]] logical plan.
+   * Write to a directory, returning a InsertIntoDir logical plan.
    */
   override def visitInsertOverwriteDir(
       ctx: InsertOverwriteDirContext): InsertDirParams = withOrigin(ctx) {
@@ -260,7 +251,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
   }
 
   /**
-   * Write to a directory, returning a [[InsertIntoDir]] logical plan.
+   * Write to a directory, returning a InsertIntoDir logical plan.
    */
   override def visitInsertOverwriteHiveDir(
       ctx: InsertOverwriteHiveDirContext): InsertDirParams = withOrigin(ctx) {
@@ -373,7 +364,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
    */
   override def visitQuerySpecification(
       ctx: QuerySpecificationContext): LogicalPlan = withOrigin(ctx) {
-    val from = OneRowRelation().optional(ctx.fromClause) {
+    val from = OneRowRelation.optional(ctx.fromClause) {
       visitFromClause(ctx.fromClause)
     }
     withQuerySpecification(ctx, from)
@@ -625,7 +616,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
     val expressions = expressionList(ctx.expression)
     Generate(
       UnresolvedGenerator(visitFunctionName(ctx.qualifiedName), expressions),
-      unrequiredChildIndex = Nil,
+      join = true,
       outer = ctx.OUTER != null,
       Some(ctx.tblName.getText.toLowerCase),
       ctx.colName.asScala.map(_.getText).map(UnresolvedAttribute.apply),
@@ -698,7 +689,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
       validate(fraction >= 0.0 - eps && fraction <= 1.0 + eps,
         s"Sampling fraction ($fraction) must be on interval [0, 1]",
         ctx)
-      Sample(0.0, fraction, withReplacement = false, (math.random * 1000).toInt, query)
+      Sample(0.0, fraction, withReplacement = false, (math.random * 1000).toInt, query)(true)
     }
 
     if (ctx.sampleMethod() == null) {
@@ -772,14 +763,8 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
   override def visitTableValuedFunction(ctx: TableValuedFunctionContext)
       : LogicalPlan = withOrigin(ctx) {
     val func = ctx.functionTable
-    val aliases = if (func.tableAlias.identifierList != null) {
-      visitIdentifierList(func.tableAlias.identifierList)
-    } else {
-      Seq.empty
-    }
-
     val tvf = UnresolvedTableValuedFunction(
-      func.identifier.getText, func.expression.asScala.map(expression), aliases)
+      func.identifier.getText, func.expression.asScala.map(expression))
     tvf.optionalMap(func.tableAlias.strictIdentifier)(aliasPlan)
   }
 
@@ -855,13 +840,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
    */
   private def mayApplyAliasPlan(tableAlias: TableAliasContext, plan: LogicalPlan): LogicalPlan = {
     if (tableAlias.strictIdentifier != null) {
-      val subquery = SubqueryAlias(tableAlias.strictIdentifier.getText, plan)
-      if (tableAlias.identifierList != null) {
-        val columnNames = visitIdentifierList(tableAlias.identifierList)
-        UnresolvedSubqueryColumnAliases(columnNames, subquery)
-      } else {
-        subquery
-      }
+      SubqueryAlias(tableAlias.strictIdentifier.getText, plan)
     } else {
       plan
     }
@@ -1321,24 +1300,26 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
   /**
    * Create or resolve a frame boundary expressions.
    */
-  override def visitFrameBound(ctx: FrameBoundContext): Expression = withOrigin(ctx) {
-    def value: Expression = {
+  override def visitFrameBound(ctx: FrameBoundContext): FrameBoundary = withOrigin(ctx) {
+    def value: Int = {
       val e = expression(ctx.expression)
-      validate(e.resolved && e.foldable, "Frame bound value must be a literal.", ctx)
-      e
+      validate(e.resolved && e.foldable && e.dataType == IntegerType,
+        "Frame bound value must be a constant integer.",
+        ctx)
+      e.eval().asInstanceOf[Int]
     }
 
     ctx.boundType.getType match {
       case SqlBaseParser.PRECEDING if ctx.UNBOUNDED != null =>
         UnboundedPreceding
       case SqlBaseParser.PRECEDING =>
-        UnaryMinus(value)
+        ValuePreceding(value)
       case SqlBaseParser.CURRENT =>
         CurrentRow
       case SqlBaseParser.FOLLOWING if ctx.UNBOUNDED != null =>
         UnboundedFollowing
       case SqlBaseParser.FOLLOWING =>
-        value
+        ValueFollowing(value)
     }
   }
 
@@ -1409,40 +1390,24 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
 
   /**
    * Create a dereference expression. The return type depends on the type of the parent.
-   * If the parent is an [[UnresolvedAttribute]], it can be a [[UnresolvedAttribute]] or
-   * a [[UnresolvedRegex]] for regex quoted in ``; if the parent is some other expression,
-   * it can be [[UnresolvedExtractValue]].
+   * If the parent is an [[UnresolvedAttribute]], it can be a [[UnresolvedAttribute]];
+   * if the parent is some other expression, it can be [[UnresolvedExtractValue]].
    */
   override def visitDereference(ctx: DereferenceContext): Expression = withOrigin(ctx) {
     val attr = ctx.fieldName.getText
     expression(ctx.base) match {
-      case unresolved_attr @ UnresolvedAttribute(nameParts) =>
-        ctx.fieldName.getStart.getText match {
-          case escapedIdentifier(columnNameRegex)
-            if conf.supportQuotedRegexColumnName && canApplyRegex(ctx) =>
-            UnresolvedRegex(columnNameRegex, Some(unresolved_attr.name),
-              conf.caseSensitiveAnalysis)
-          case _ =>
-            UnresolvedAttribute(nameParts :+ attr)
-        }
+      case UnresolvedAttribute(nameParts) =>
+        UnresolvedAttribute(nameParts :+ attr)
       case e =>
         UnresolvedExtractValue(e, Literal(attr))
     }
   }
 
   /**
-   * Create an [[UnresolvedAttribute]] expression or a [[UnresolvedRegex]] if it is a regex
-   * quoted in ``
+   * Create an [[UnresolvedAttribute]] expression.
    */
   override def visitColumnReference(ctx: ColumnReferenceContext): Expression = withOrigin(ctx) {
-    ctx.getStart.getText match {
-      case escapedIdentifier(columnNameRegex)
-        if conf.supportQuotedRegexColumnName && canApplyRegex(ctx) =>
-        UnresolvedRegex(columnNameRegex, None, conf.caseSensitiveAnalysis)
-      case _ =>
-        UnresolvedAttribute.quoted(ctx.getText)
-    }
-
+    UnresolvedAttribute.quoted(ctx.getText)
   }
 
   /**
@@ -1570,14 +1535,20 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
    * Create a Byte Literal expression.
    */
   override def visitTinyIntLiteral(ctx: TinyIntLiteralContext): Literal = {
-    numericLiteral(ctx, Byte.MinValue, Byte.MaxValue, ByteType.simpleString)(_.toByte)
+    numericLiteral(ctx,
+      Byte.MinValue.asInstanceOf[BigDecimal],
+      Byte.MaxValue.asInstanceOf[BigDecimal],
+      ByteType.simpleString)(_.toByte)
   }
 
   /**
    * Create a Short Literal expression.
    */
   override def visitSmallIntLiteral(ctx: SmallIntLiteralContext): Literal = {
-    numericLiteral(ctx, Short.MinValue, Short.MaxValue, ShortType.simpleString)(_.toShort)
+    numericLiteral(ctx,
+      Short.MinValue.asInstanceOf[BigDecimal],
+      Short.MaxValue.asInstanceOf[BigDecimal],
+      ShortType.simpleString)(_.toShort)
   }
 
   /**

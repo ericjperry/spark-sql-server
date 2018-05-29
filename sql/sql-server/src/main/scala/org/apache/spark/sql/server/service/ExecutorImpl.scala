@@ -49,7 +49,7 @@ private case class OperationImpl(
   }
 
   private val analyzedPlan: LogicalPlan = {
-    sqlContext.sessionState.analyzer.execute(query._2)
+    sqlContext.sessionState.executePlan(query._2).analyzed
   }
 
   override def statementId(): String = _statementId

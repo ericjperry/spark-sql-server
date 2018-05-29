@@ -93,7 +93,7 @@ private [service] object PgCatalogUpdater extends Logging {
           val schema = qe.analyzed.schema
           PgMetadata.registerTable(
             dbName, tableName, schema, CatalogTableType.VIEW, sqlContext)
-        case CreateFunctionCommand(dbNameOption, funcName, _, _, _, _, _) =>
+        case CreateFunctionCommand(dbNameOption, funcName, _, _, _) =>
           val dbName = dbNameOption.getOrElse("default")
           PgMetadata.registerFunction(dbName, funcName, sqlContext)
         case DropDatabaseCommand(dbName, _, _) =>
@@ -264,7 +264,7 @@ private[postgresql] object PgMetadata extends Logging {
   private def registerFunction(
       ctx: SQLContext, func: FunctionIdentifier, udf: UserDefinedFunction): Unit = {
     def builder(children: Seq[Expression]) = udf.apply(children.map(Column.apply) : _*).expr
-    ctx.sessionState.functionRegistry.registerFunction(func, builder)
+    ctx.sessionState.functionRegistry.registerFunction(func.funcName, builder)
   }
 
   private val pgSystemFunctions = Seq(

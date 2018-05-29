@@ -206,7 +206,7 @@ private[postgresql] class PgAstBuilder(conf: SQLConf) extends SparkSqlAstBuilder
     // Fill a gap between PostgreSQL `generate_series` and Spark `range` here
     val e = Add(end, Literal(1, IntegerType))
     val args = intvl.map(i => start :: e :: i :: Nil).getOrElse(start :: e :: Nil)
-    UnresolvedTableValuedFunction("range", args, Seq.empty)
+    UnresolvedTableValuedFunction("range", args)
   }
 
   override def visitSubstringInternalFunc(ctx: SubstringInternalFuncContext): Expression = {
